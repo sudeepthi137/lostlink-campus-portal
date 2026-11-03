@@ -21,6 +21,7 @@ app.use(
       "http://127.0.0.1:5173",
       "http://localhost:5174",
       "http://127.0.0.1:5174",
+      "https://lostlink-campus-portal.netlify.app",
     ],
   })
 );
@@ -95,6 +96,6 @@ app.use((req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`LostLink API running at http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`LostLink API running on port ${PORT}`);
 });
