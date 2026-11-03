@@ -1,20 +1,19 @@
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+
 
 // Get the saved authentication token
 function getToken() {
   return localStorage.getItem("token");
 }
-
 // Add authentication headers when a user is logged in
 function getHeaders(extraHeaders = {}) {
   const token = getToken();
-
   return {
     ...extraHeaders,
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
-
 // Read API responses safely
 async function readResponse(response, fallbackMessage) {
   const result = await response.json().catch(() => ({}));
@@ -22,26 +21,20 @@ async function readResponse(response, fallbackMessage) {
   if (!response.ok || result.success === false) {
     throw new Error(result.message || fallbackMessage);
   }
-
   return result;
 }
-
 // Get all items
 export async function getItems() {
   const response = await fetch(`${API_BASE_URL}/items`);
   const result = await readResponse(response, "Failed to load items");
-
   return result.data;
 }
-
 // Get categories
 export async function getCategories() {
   const response = await fetch(`${API_BASE_URL}/categories`);
   const result = await readResponse(response, "Failed to load categories");
-
   return result.data;
 }
-
 // Register a new student
 export async function registerUser(userData) {
   const response = await fetch(`${API_BASE_URL}/auth/register`, {
@@ -122,7 +115,7 @@ export function logoutUser() {
 export async function getAdminUsers() {
   const token = localStorage.getItem("token");
 
-  const response = await fetch("http://localhost:5000/api/admin/users", {
+  const response = await fetch(`${API_BASE_URL}/admin/users`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
