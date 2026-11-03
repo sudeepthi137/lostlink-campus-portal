@@ -1313,9 +1313,9 @@ onClick={() => {
               </tr>
             </thead>
             <tbody>
-              {adminUsers.map((u) => (
+              {adminUsers.map((u, index) => (
                 <tr key={u.user_id}>
-                  <td>{u.user_id}</td>
+                  <td>{index + 1}</td>
                   <td>{u.full_name}</td>
                   <td>{u.email}</td>
                   <td>{u.department || "—"}</td>

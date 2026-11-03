@@ -49,13 +49,17 @@ router.get("/summary", async (_req, res, next) => {
 // List users
 router.get("/users", async (_req, res, next) => {
   try {
-    const [data] = await db.query(
-      `SELECT user_id, full_name, email, role, department,
-              is_active, created_at
-       FROM users
-       ORDER BY created_at DESC`
-    );
+const [users] = await db.query(
+  `SELECT user_id, full_name, email, role, department,
+          is_active, created_at
+   FROM users
+   ORDER BY user_id ASC`
+);
 
+const data = users.map((user, index) => ({
+  ...user,
+  serial_no: index + 1
+}));
     res.json({ success: true, data });
   } catch (error) {
     next(error);
