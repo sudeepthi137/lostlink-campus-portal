@@ -1,3 +1,4 @@
+
 const express = require("express");
 const db = require("../db");
 const { authRequired } = require("../middleware");
@@ -68,7 +69,6 @@ router.get("/recipients/:itemId", async (req, res, next) => {
     let recipients = [];
 
     if (ownerId === userId) {
-      // Item owner can message eligible claimants.
       const [claimants] = await db.query(
         `SELECT DISTINCT u.user_id, u.full_name
          FROM claims c
@@ -82,7 +82,6 @@ router.get("/recipients/:itemId", async (req, res, next) => {
 
       recipients = claimants;
     } else {
-      // Any student can message the owner of the selected item.
       const [owners] = await db.query(
         `SELECT user_id, full_name
          FROM users
@@ -101,6 +100,8 @@ router.get("/recipients/:itemId", async (req, res, next) => {
 
 // POST: Send a message
 router.post("/", async (req, res, next) => {
+  let connection;
+
   try {
     const userId = Number(req.user.user_id);
 
@@ -115,6 +116,7 @@ router.post("/", async (req, res, next) => {
       !item_id ||
       !recipient_id ||
       !message_text ||
+      typeof message_text !== "string" ||
       !message_text.trim()
     ) {
       return res.status(400).json({
@@ -178,13 +180,13 @@ router.post("/", async (req, res, next) => {
     let validClaimId = null;
 
     if (ownerId === userId) {
-      // Owner can message only eligible claimants.
       const [claims] = await db.query(
         `SELECT claim_id
          FROM claims
          WHERE item_id = ?
            AND claimant_id = ?
-           AND status IN ('pending', 'approved')`,
+           AND status IN ('pending', 'approved')
+         LIMIT 1`,
         [itemId, recipientId]
       );
 
@@ -198,7 +200,6 @@ router.post("/", async (req, res, next) => {
       validClaimId = claims[0].claim_id;
 
     } else if (recipientId === ownerId) {
-      // Student can message the item owner without a claim.
       const [claims] = await db.query(
         `SELECT claim_id
          FROM claims
@@ -209,7 +210,6 @@ router.post("/", async (req, res, next) => {
         [itemId, userId]
       );
 
-      // Attach a claim ID if one exists; otherwise leave it null.
       if (claims.length) {
         validClaimId = claims[0].claim_id;
       }
@@ -232,11 +232,31 @@ router.post("/", async (req, res, next) => {
       });
     }
 
-    const [result] = await db.query(
+    // Use a transaction to generate a unique message ID
+    // and save the message and notification together.
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    const [counters] = await connection.query(
+      "SELECT next_id FROM message_id_sequence WHERE id = 1 FOR UPDATE"
+    );
+
+    if (!counters.length) {
+      throw new Error("Message ID counter is not initialized.");
+    }
+
+    const messageId = Number(counters[0].next_id);
+
+    await connection.query(
+      "UPDATE message_id_sequence SET next_id = next_id + 1 WHERE id = 1"
+    );
+
+    await connection.query(
       `INSERT INTO messages
-       (item_id, claim_id, sender_id, recipient_id, message_text)
-       VALUES (?, ?, ?, ?, ?)`,
+       (message_id, item_id, claim_id, sender_id, recipient_id, message_text)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
+        messageId,
         itemId,
         validClaimId,
         userId,
@@ -245,11 +265,26 @@ router.post("/", async (req, res, next) => {
       ]
     );
 
-    await db.query(
+    const [notificationCounters] = await connection.query(
+      "SELECT next_id FROM notification_id_sequence WHERE id = 1 FOR UPDATE"
+    );
+
+    if (!notificationCounters.length) {
+      throw new Error("Notification ID counter is not initialized.");
+    }
+
+    const notificationId = Number(notificationCounters[0].next_id);
+
+    await connection.query(
+      "UPDATE notification_id_sequence SET next_id = next_id + 1 WHERE id = 1"
+    );
+
+    await connection.query(
       `INSERT INTO notifications
-       (user_id, title, message, notification_type, related_item_id)
-       VALUES (?, ?, ?, 'message', ?)`,
+       (notification_id, user_id, title, message, notification_type, related_item_id)
+       VALUES (?, ?, ?, ?, 'message', ?)`,
       [
+        notificationId,
         recipientId,
         "New message",
         `You received a message about ${items[0].item_name}.`,
@@ -257,16 +292,25 @@ router.post("/", async (req, res, next) => {
       ]
     );
 
+    await connection.commit();
+
     res.status(201).json({
       success: true,
       message: "Message sent successfully.",
       data: {
-        message_id: result.insertId
+        message_id: messageId
       }
     });
 
   } catch (err) {
+    if (connection) {
+      await connection.rollback();
+    }
     next(err);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 });
 

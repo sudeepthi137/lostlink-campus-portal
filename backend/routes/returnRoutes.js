@@ -19,7 +19,7 @@ router.get("/", async (req, res, next) => {
         finder.full_name AS finder_name
       FROM return_records rr
       JOIN items i ON i.item_id = rr.item_id
-      JOIN claims c ON c.claim_id = rr.claim_id
+      LEFT JOIN claims c ON c.claim_id = rr.claim_id
       JOIN users owner ON owner.user_id = rr.owner_id
       JOIN users finder ON finder.user_id = rr.finder_id
     `;
@@ -41,11 +41,13 @@ router.get("/", async (req, res, next) => {
   }
 });
 
-// Owner and claimant independently confirm item handover
+// Confirm item handover
 router.post("/:claimId/confirm", async (req, res, next) => {
-  const connection = await db.getConnection();
+  let connection;
 
   try {
+    connection = await db.getConnection();
+
     const claimId = Number(req.params.claimId);
     const userId = Number(req.user.user_id);
     const notes = String(req.body?.notes || "").trim();
@@ -59,6 +61,7 @@ router.post("/:claimId/confirm", async (req, res, next) => {
 
     await connection.beginTransaction();
 
+    // Get claim and item owner
     const [claims] = await connection.query(
       `SELECT
          c.claim_id,
@@ -75,6 +78,7 @@ router.post("/:claimId/confirm", async (req, res, next) => {
 
     if (!claims.length) {
       await connection.rollback();
+
       return res.status(404).json({
         success: false,
         message: "Claim not found."
@@ -85,53 +89,81 @@ router.post("/:claimId/confirm", async (req, res, next) => {
     const ownerId = Number(claim.owner_id);
     const finderId = Number(claim.claimant_id);
 
-    if (claim.status !== "approved" && claim.status !== "completed") {
+    if (!["approved", "completed"].includes(claim.status)) {
       await connection.rollback();
+
       return res.status(409).json({
         success: false,
         message: "Only approved claims can be returned."
       });
     }
 
+    // Only owner and claimant can confirm
     if (userId !== ownerId && userId !== finderId) {
       await connection.rollback();
+
       return res.status(403).json({
         success: false,
         message: "Only the item owner and claimant can confirm the return."
       });
     }
 
+    // Check existing return record
     const [existing] = await connection.query(
       "SELECT * FROM return_records WHERE item_id = ? FOR UPDATE",
       [claim.item_id]
     );
 
-    if (existing.length && Number(existing[0].claim_id) !== claimId) {
+    if (
+      existing.length &&
+      Number(existing[0].claim_id) !== claimId
+    ) {
       await connection.rollback();
+
       return res.status(409).json({
         success: false,
         message: "A different claim already has a return record for this item."
       });
     }
 
-    if (claim.status === "completed" &&
-        existing.length &&
-        Number(existing[0].owner_confirmed) === 1 &&
-        Number(existing[0].finder_confirmed) === 1) {
+    // Prevent duplicate confirmation after completion
+    if (
+      existing.length &&
+      Number(existing[0].owner_confirmed) === 1 &&
+      Number(existing[0].finder_confirmed) === 1
+    ) {
       await connection.rollback();
+
       return res.json({
         success: true,
         message: "This item has already been returned."
       });
     }
 
+    // Create a new return record
     if (!existing.length) {
+      // Generate unique return ID
+      const [counters] = await connection.query(
+        "SELECT next_id FROM return_id_sequence WHERE id = 1 FOR UPDATE"
+      );
+
+      if (!counters.length) {
+        throw new Error("Return ID counter is not initialized.");
+      }
+
+      const returnId = Number(counters[0].next_id);
+
+      await connection.query(
+        "UPDATE return_id_sequence SET next_id = next_id + 1 WHERE id = 1"
+      );
+
       await connection.query(
         `INSERT INTO return_records
-         (item_id, claim_id, owner_id, finder_id,
+         (return_id, item_id, claim_id, owner_id, finder_id,
           owner_confirmed, finder_confirmed, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
+          returnId,
           claim.item_id,
           claimId,
           ownerId,
@@ -142,9 +174,9 @@ router.post("/:claimId/confirm", async (req, res, next) => {
         ]
       );
     } else {
-      const column = userId === ownerId
-        ? "owner_confirmed"
-        : "finder_confirmed";
+      // Update the confirmation of the current user
+      const column =
+        userId === ownerId ? "owner_confirmed" : "finder_confirmed";
 
       await connection.query(
         `UPDATE return_records
@@ -155,6 +187,7 @@ router.post("/:claimId/confirm", async (req, res, next) => {
       );
     }
 
+    // Get updated return record
     const [records] = await connection.query(
       "SELECT * FROM return_records WHERE item_id = ?",
       [claim.item_id]
@@ -166,6 +199,7 @@ router.post("/:claimId/confirm", async (req, res, next) => {
       Number(record.owner_confirmed) === 1 &&
       Number(record.finder_confirmed) === 1;
 
+    // Complete return when both parties confirm
     if (bothConfirmed) {
       await connection.query(
         "UPDATE items SET status = 'returned' WHERE item_id = ?",
@@ -178,13 +212,33 @@ router.post("/:claimId/confirm", async (req, res, next) => {
       );
     }
 
-    const otherUserId = userId === ownerId ? finderId : ownerId;
+    // Identify the other user
+    const otherUserId =
+      userId === ownerId ? finderId : ownerId;
+
+    // Generate unique notification ID
+    const [notificationCounters] = await connection.query(
+      "SELECT next_id FROM notification_id_sequence WHERE id = 1 FOR UPDATE"
+    );
+
+    if (!notificationCounters.length) {
+      throw new Error("Notification ID counter is not initialized.");
+    }
+
+    const notificationId = Number(notificationCounters[0].next_id);
 
     await connection.query(
+      "UPDATE notification_id_sequence SET next_id = next_id + 1 WHERE id = 1"
+    );
+
+    // Insert notification
+    await connection.query(
       `INSERT INTO notifications
-       (user_id, title, message, notification_type, related_item_id)
-       VALUES (?, ?, ?, 'return', ?)`,
+       (notification_id, user_id, title, message,
+        notification_type, related_item_id)
+       VALUES (?, ?, ?, ?, 'return', ?)`,
       [
+        notificationId,
         otherUserId,
         "Return confirmation",
         bothConfirmed
@@ -202,16 +256,28 @@ router.post("/:claimId/confirm", async (req, res, next) => {
         ? "Both parties confirmed. Item successfully marked as returned."
         : "Your confirmation was saved. Waiting for the other party.",
       data: {
+        return_id: record.return_id,
         owner_confirmed: Number(record.owner_confirmed),
         finder_confirmed: Number(record.finder_confirmed),
         completed: bothConfirmed
       }
     });
+
   } catch (err) {
-    await connection.rollback();
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error("Transaction rollback failed:", rollbackError);
+      }
+    }
+
     next(err);
+
   } finally {
-    connection.release();
+    if (connection) {
+      connection.release();
+    }
   }
 });
 
