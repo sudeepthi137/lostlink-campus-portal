@@ -11,6 +11,7 @@ import {
   getMessages,
   sendMessage,
   getMessageRecipients,
+  API_BASE_URL,
 } from "./api";
 import {
   getClaims,
@@ -21,7 +22,7 @@ import {
   confirmReturn
 } from "./api";
 
-const API_ORIGIN = "http://localhost:5000";
+const API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 
 function getImageUrl(imagePath) {
 
@@ -604,7 +605,7 @@ async function submitReport(e) {
   }
 
   try {
-    const response = await fetch("http://localhost:5000/api/reports", {
+    const response = await fetch(`${API_BASE_URL}/reports`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

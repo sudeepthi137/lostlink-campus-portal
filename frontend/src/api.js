@@ -1,6 +1,8 @@
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV
+    ? "http://localhost:5000/api"
+    : "https://lostlink-backend-9lmy.onrender.com/api");
 
 // Get the saved authentication token
 function getToken() {

@@ -2,28 +2,56 @@
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
+const crypto = require("crypto");
+const { createClient } = require("@supabase/supabase-js");
 const db = require("../db");
 
 const { authRequired, adminRequired } = require("../middleware");
 const router = express.Router();
 
+// Connect to Supabase Storage
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+const bucket = process.env.SUPABASE_BUCKET || "item-images";
+
+// Store uploaded images in memory before sending them to Supabase
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_q, _f, cb) =>
-      cb(null, path.join(__dirname, "..", "uploads")),
-    filename: (_q, f, cb) =>
-      cb(
-        null,
-        Date.now() +
-          "-" +
-          Math.round(Math.random() * 1e9) +
-          path.extname(f.originalname).toLowerCase()
-      )
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_q, f, cb) =>
-    cb(null, ["image/jpeg", "image/png", "image/webp"].includes(f.mimetype))
+  fileFilter: (_q, f, cb) => {
+    if (["image/jpeg", "image/png", "image/webp"].includes(f.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only JPG, PNG and WEBP images are allowed."));
+    }
+  }
 });
+
+// Upload image to Supabase Storage
+async function uploadImage(file) {
+  const extension = path.extname(file.originalname).toLowerCase();
+  const filename = `${Date.now()}-${crypto.randomUUID()}${extension}`;
+
+  const { error } = await supabase.storage
+    .from(bucket)
+    .upload(filename, file.buffer, {
+      contentType: file.mimetype,
+      upsert: false
+    });
+
+  if (error) {
+    throw new Error("Image upload failed: " + error.message);
+  }
+
+  const { data } = supabase.storage
+    .from(bucket)
+    .getPublicUrl(filename);
+
+  return data.publicUrl;
+}
 
 // GET ALL ITEMS
 router.get("/", async (req, res, next) => {
@@ -116,10 +144,10 @@ router.post("/", authRequired, upload.single("image"), async (req, res, next) =>
       });
     }
 
-    const image = req.file ? "/uploads/" + req.file.filename : null;
+    // Upload image to Supabase and save its public URL
+    const image = req.file ? await uploadImage(req.file) : null;
 
-    // Generate the next item ID because the TiDB column
-    // is currently not configured as AUTO_INCREMENT.
+    // Generate the next item ID
     const [[{ nextId }]] = await db.query(
       "SELECT COALESCE(MAX(item_id), 0) + 1 AS nextId FROM items"
     );
