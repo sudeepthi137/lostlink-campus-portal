@@ -42,7 +42,7 @@ function getImageUrl(imagePath) {
 
   const cleanPath = imagePath.replace(/\\/g, "/");
 
-  return `http://localhost:5000${
+return `${API_ORIGIN}${
 
     cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`
 
@@ -962,14 +962,28 @@ onClick={() => {
               <p>📍 Location: {selected.location}</p>
               <p>📅 Date: {selected.item_date}</p>
               <p>Current status: <b>{selected.status}</b></p>
-              <button onClick={() => {
-                if (!user) {
-                  setNotice("Login first to submit a claim.");
-                  setPage("Login");
-                } else {
-                  setPage("Claim");
-                }
-              }}>Claim This Item</button>
+             
+<button
+  disabled={String(selected.status || "").toLowerCase() === "returned"}
+  className={
+    String(selected.status || "").toLowerCase() === "returned"
+      ? "claim-button disabled"
+      : "claim-button"
+  }
+  onClick={() => {
+    if (!user) {
+      setNotice("Login first to submit a claim.");
+      setPage("Login");
+    } else {
+      setPage("Claim");
+    }
+  }}
+>
+  {String(selected.status || "").toLowerCase() === "returned"
+    ? "Item Already Returned"
+    : "Claim This Item"}
+</button>
+
               <button className="outline" onClick={() => {
                 setReportReason("");
                 setPage("Report Post");
